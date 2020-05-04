@@ -21,11 +21,12 @@ This module requires Python 3.5.2 or later to run.
 import asyncio
 from functools import partial
 
-from mpd.base import HELLO_PREFIX, ERROR_PREFIX, SUCCESS
+from mpd.base import ERROR_PREFIX, SUCCESS
 from mpd.base import MPDClientBase
 from mpd.base import MPDClient as SyncMPDClient
 from mpd.base import ProtocolError, ConnectionError, CommandError
 from mpd.base import mpd_command_provider
+
 
 class BaseCommandResult(asyncio.Future):
     """A future that carries its command/args/callback with it for the
@@ -36,6 +37,7 @@ class BaseCommandResult(asyncio.Future):
         self._command = command
         self._args = args
         self._callback = callback
+
 
 class CommandResult(BaseCommandResult):
     def __init__(self, *args, **kwargs):
@@ -51,6 +53,7 @@ class CommandResult(BaseCommandResult):
 
     def _feed_error(self, error):
         self.set_exception(error)
+
 
 class CommandResultIterable(BaseCommandResult):
     """Variant of CommandResult where the underlying callback is an
@@ -78,7 +81,7 @@ class CommandResultIterable(BaseCommandResult):
         asyncio.Task(self.__feed_future())
         return super().__await__()
 
-    __iter__ = __await__ # for 'yield from' style invocation
+    __iter__ = __await__   # for 'yield from' style invocation
 
     async def __feed_future(self):
         result = []
@@ -94,7 +97,7 @@ class CommandResultIterable(BaseCommandResult):
 
 @mpd_command_provider
 class MPDClient(MPDClientBase):
-    __run_task = None # doubles as indicator for being connected
+    __run_task = None  # doubles as indicator for being connected
 
     #: When in idle, this is a Future on which incoming commands should set a
     #: result. (This works around asyncio.Queue not having a .peek() coroutine)
@@ -115,8 +118,8 @@ class MPDClient(MPDClientBase):
         self.__rfile, self.__wfile = r, w
 
         self.__commandqueue = asyncio.Queue(loop=loop)
-        self.__idle_results = asyncio.Queue(loop=loop) #: a queue of CommandResult("idle") futures
-        self.__idle_consumers = [] #: list of (subsystem-list, callbacks) tuples
+        self.__idle_results = asyncio.Queue(loop=loop)  #: a queue of CommandResult("idle") futures
+        self.__idle_consumers = []  #: list of (subsystem-list, callbacks) tuples
 
         try:
             helloline = await asyncio.wait_for(self.__readline(), timeout=5)
@@ -130,7 +133,7 @@ class MPDClient(MPDClientBase):
         self.__idle_task = asyncio.Task(self.__distribute_idle_results())
 
     def disconnect(self):
-        if self.__run_task is not None: # is None eg. when connection fails in .connect()
+        if self.__run_task is not None:  # is None eg. when connection fails in .connect()
             self.__run_task.cancel()
         if self.__idle_task is not None:
             self.__idle_task.cancel()
@@ -166,10 +169,10 @@ class MPDClient(MPDClientBase):
             while True:
                 try:
                     result = await asyncio.wait_for(
-                            self.__commandqueue.get(),
-                            timeout=self.IMMEDIATE_COMMAND_TIMEOUT,
-                            loop=self.__loop,
-                            )
+                        self.__commandqueue.get(),
+                        timeout=self.IMMEDIATE_COMMAND_TIMEOUT,
+                        loop=self.__loop,
+                    )
                 except asyncio.TimeoutError:
                     # The cancellation of the __commandqueue.get() that happens
                     # in this case is intended, and is just what asyncio.Queue
@@ -193,18 +196,18 @@ class MPDClient(MPDClientBase):
                             # We're in idle mode.
                             line_future = asyncio.shield(self.__read_output_line())
                             await asyncio.wait([line_future, self.__command_enqueued],
-                                    return_when=asyncio.FIRST_COMPLETED)
+                                               return_when=asyncio.FIRST_COMPLETED)
                             if self.__command_enqueued.done():
                                 self._write_command("noidle")
                                 self.__command_enqueued = None
-                            l = await line_future
+                            line = await line_future
                         else:
-                            l = await self.__read_output_line()
+                            line = await self.__read_output_line()
                     except CommandError as e:
                         result._feed_error(e)
                         break
-                    result._feed_line(l)
-                    if l is None:
+                    result._feed_line(line)
+                    if line is None:
                         break
 
                 result = None
@@ -258,7 +261,6 @@ class MPDClient(MPDClientBase):
     # FIXME This code should be shareable.
     _write_command = SyncMPDClient._write_command
 
-
     async def __read_output_line(self):
         """Kind of like SyncMPDClient._read_line"""
         line = await self.__readline()
@@ -272,33 +274,6 @@ class MPDClient(MPDClientBase):
             return None
         return line
 
-
-#    async def _parse_objects_direct(self, lines, delimiters=[], lookup_delimiter=False):
-#        obj = {}
-#        while True:
-#            line = await lines.get()
-#            if isinstance(line, BaseException):
-#                raise line
-#            if line is None:
-#                break
-#            key, value = self._parse_pair(line, separator=": ")
-#            key = key.lower()
-#            if lookup_delimiter and not delimiters:
-#                delimiters = [key]
-#            if obj:
-#                if key in delimiters:
-#                    yield obj
-#                    obj = {}
-#                elif key in obj:
-#                    if not isinstance(obj[key], list):
-#                        obj[key] = [obj[key], value]
-#                    else:
-#                        obj[key].append(value)
-#                    continue
-#            obj[key] = value
-#        if obj:
-#            yield obj
-
     def _parse_objects_direct(self, lines, delimiters=[], lookup_delimiter=False):
         # This is a workaround implementing the above comment on Python 3.5. It
         # is recommended that the commented-out code be used for reasoning, and
@@ -306,8 +281,11 @@ class MPDClient(MPDClientBase):
         # implementation.
 
         outerself = self
+
         class WrappedLoop:
-            def __init__(self):
+            def __init__(self, delimiters):
+                self.delimiters = delimiters
+
                 self.obj = {}
                 self.exhausted = False
 
@@ -329,10 +307,10 @@ class MPDClient(MPDClientBase):
                         continue
                     key, value = outerself._parse_pair(line, separator=": ")
                     key = key.lower()
-                    if lookup_delimiter and not delimiters:
-                        delimiters = [key]
+                    if lookup_delimiter and not self.delimiters:
+                        self.delimiters = [key]
                     if self.obj:
-                        if key in delimiters:
+                        if key in self.delimiters:
                             oldobj = self.obj
                             self.obj = {key: value}
                             return oldobj
@@ -343,7 +321,7 @@ class MPDClient(MPDClientBase):
                                 self.obj[key].append(value)
                             continue
                     self.obj[key] = value
-        return WrappedLoop()
+        return WrappedLoop(delimiters)
 
     # command provider interface
 
@@ -353,6 +331,7 @@ class MPDClient(MPDClientBase):
         if hasattr(cls, name):
             # Idle and noidle are explicitly implemented, skipping them.
             return
+
         def f(self, *args):
             result = command_class(name, args, partial(callback, self))
             if self.__run_task is None:
